@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pulse Runner</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #0b1020;
+      color: #f4f6ff;
+      font: 16px system-ui, sans-serif;
+    }
+    main { width: min(900px, 94vw); }
+    h1 { margin: 0 0 8px; letter-spacing: .08em; }
+    p { color: #bac4e4; }
+    canvas {
+      display: block;
+      width: 100%;
+      border: 2px solid #36456f;
+      border-radius: 12px;
+      background: #111a32;
+      touch-action: manipulation;
+    }
+    .hint { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>PULSE RUNNER</h1>
+    <p>Jump over the blocks. How far can you go?</p>
+    <canvas id="game" width="900" height="360" aria-label="Pulse Runner game"></canvas>
+    <p class="hint">Press Space, ↑, or click/tap to jump. Press again after a crash to restart.</p>
+  </main>
+
+  <script>
+    const canvas = document.querySelector("#game");
+    const ctx = canvas.getContext("2d");
+
+    const ground = 292;
+    const player = { x: 110, y: ground - 34, size: 34, vy: 0 };
+    let obstacles = [];
+    let score = 0;
+    let speed = 5;
+    let playing = false;
+    let crashed = false;
+    let frame = 0;
+
+    function reset() {
+      player.y = ground - player.size;
+      player.vy = 0;
+      obstacles = [];
+      score = 0;
+      speed = 5;
+      frame = 0;
+      crashed = false;
+      playing = true;
+    }
+
+    function jump() {
+      if (!playing) reset();
+      if (crashed) {
+        reset();
+        return;
+      }
+      if (player.y >= ground - player.size - 1) player.vy = -13;
+    }
+
+    addEventListener("keydown", event => {
+      if (["Space", "ArrowUp"].includes(event.code)) {
+        event.preventDefault();
+        jump();
+      }
+    });
+    canvas.addEventListener("pointerdown", jump);
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Subtle grid
+      ctx.strokeStyle = "#1a2748";
+      ctx.lineWidth = 1;
+      for (let x = 0; x < canvas.width; x += 45) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, ground);
+        ctx.stroke();
+      }
+
+      // Ground
+      ctx.fillStyle = "#26385e";
+      ctx.fillRect(0, ground, canvas.width, 4);
+      ctx.fillStyle = "#45f0c5";
+      ctx.fillRect(0, ground, canvas.width, 3);
+
+      // Player
+      ctx.fillStyle = "#8a7dff";
+      ctx.fillRect(player.x, player.y, player.size, player.size);
+      ctx.fillStyle = "#d9d5ff";
+      ctx.fillRect(player.x + 21, player.y + 8, 5, 5);
+
+      // Obstacles
+      ctx.fillStyle = "#ff5478";
+      for (const obstacle of obstacles) {
+        ctx.beginPath();
+        ctx.moveTo(obstacle.x, ground);
+        ctx.lineTo(obstacle.x + obstacle.w / 2, ground - obstacle.h);
+        ctx.lineTo(obstacle.x + obstacle.w, ground);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      ctx.fillStyle = "#f4f6ff";
+      ctx.font = "bold 20px system-ui";
+      ctx.fillText(`SCORE  ${Math.floor(score)}`, 24, 34);
+
+      if (!playing || crashed) {
+        ctx.fillStyle = "rgba(5, 9, 22, .72)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 34px system-ui";
+        ctx.fillText(crashed ? "CRASH!" : "READY?", canvas.width / 2, 150);
+        ctx.font = "18px system-ui";
+        ctx.fillStyle = "#45f0c5";
+        ctx.fillText(
+          crashed ? "Tap or press Space to try again" : "Tap or press Space to start",
+          canvas.width / 2, 190
+        );
+        ctx.textAlign = "left";
+      }
+    }
+
+    function update() {
+      if (playing && !crashed) {
+        frame++;
+        score += 0.12;
+        speed = 5 + score / 100;
+
+        player.vy += 0.65;
+        player.y += player.vy;
+        if (player.y > ground - player.size) {
+          player.y = ground - player.size;
+          player.vy = 0;
+        }
+
+        if (frame % 90 === 0) {
+          const h = 28 + Math.random() * 25;
+          obstacles.push({ x: canvas.width + 10, w: 28, h });
+        }
+
+        for (const obstacle of obstacles) {
+          obstacle.x -= speed;
+          const hit =
+            player.x + player.size - 5 > obstacle.x &&
+            player.x + 5 < obstacle.x + obstacle.w &&
+            player.y + player.size - 4 > ground - obstacle.h;
+          if (hit) crashed = true;
+        }
+        obstacles = obstacles.filter(obstacle => obstacle.x + obstacle.w > 0);
+      }
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+    loop();
+  </script>
+</body>
+</html>
