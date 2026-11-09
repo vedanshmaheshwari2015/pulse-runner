@@ -70,49 +70,98 @@ function addSpikeRow(x, count, gap = 34) {
 
 function makeChunk(x) {
   const area = Math.min(stages - 1, Math.floor(x / stageLength));
-  const tough = area >= 1;
-  const gapChance = [0, .13, .20, .25, .30][area];
-  const hasPit = tough && Math.random() < gapChance;
-  const pitStart = x + 220 + Math.random() * 65;
-  const pitEnd = pitStart + 105 + Math.random() * 65;
+  const hasPit = area >= 1 && Math.random() < 0.12 + area * 0.04;
+  const pitStart = x + 230 + Math.random() * 50;
+  const pitEnd = pitStart + 110 + Math.random() * 45;
 
   if (hasPit) {
     floors.push({ x, w: pitStart - x });
     floors.push({ x: pitEnd, w: x + 460 - pitEnd });
-    // A raised route sometimes bridges the deadly gap.
-    if (Math.random() < .55) addPlatform(pitStart - 12, 245, pitEnd - pitStart + 24, 22);
+
+    // Some pits have a raised block path across them.
+    if (Math.random() < 0.5) {
+      addPlatform(pitStart - 10, 245, pitEnd - pitStart + 20, 22);
+    }
   } else {
     floors.push({ x, w: 460 });
   }
 
-  const pattern = Math.random();
+  const pattern = Math.floor(Math.random() * 4);
 
-  // Climbable blocks and raised paths.
-  if (pattern < .24) {
-    addPlatform(x + 115, 270, 72, 60);
-    addPlatform(x + 220, 220, 105, 20);
-    if (area >= 2) addHazard("orb", x + 275, 178, 32, 32);
-  } else if (pattern < .43) {
-    addPlatform(x + 95, 250, 90, 80);
-    addPlatform(x + 220, 205, 105, 20);
-    addPlatform(x + 345, 250, 80, 80);
-  } else if (pattern < .63) {
-    addSpikeRow(x + 190, area >= 3 ? 3 : 2, 34);
-    if (area >= 2) addHazard("saw", x + 310, 268, 38, 38);
-  } else if (pattern < .80) {
-    addPlatform(x + 170, 265, 65, 65);
-    addHazard("laser", x + 295, 215, 24, 115);
-    if (area >= 3) addSpikeRow(x + 355, 2, 34);
-  } else {
-    addHazard("saw", x + 195, 265, 40, 40);
-    addHazard("orb", x + 295, 225, 34, 34);
-    if (area >= 2) addHazard("laser", x + 375, 200, 22, 130);
+  // Area 1: learn to jump over blocks and climb onto them.
+  if (area === 0) {
+    if (pattern === 0) {
+      addPlatform(x + 170, groundY - 54, 62, 54);
+    } else if (pattern === 1) {
+      addPlatform(x + 125, groundY - 48, 58, 48);
+      addPlatform(x + 245, groundY - 68, 72, 68);
+    } else if (pattern === 2) {
+      addPlatform(x + 115, groundY - 56, 65, 56);
+      addSpikeRow(x + 255, 2);
+    } else {
+      addPlatform(x + 105, groundY - 45, 55, 45);
+      addPlatform(x + 205, groundY - 75, 65, 75);
+      addPlatform(x + 320, groundY - 52, 58, 52);
+    }
+    return;
   }
 
-  // A few areas hide an extra danger near a tempting platform.
-  if (area >= 2 && Math.random() < .35) {
-    addPlatform(x + 35, 235, 90, 20);
-    addHazard("spike", x + 82, 201, 34, 34);
+  // Area 2: longer block sequences, with pits and saws.
+  if (area === 1) {
+    if (pattern === 0) {
+      addPlatform(x + 105, groundY - 58, 72, 58);
+      addPlatform(x + 220, groundY - 58, 72, 58);
+    } else if (pattern === 1) {
+      addPlatform(x + 110, groundY - 48, 58, 48);
+      addPlatform(x + 200, groundY - 78, 68, 78);
+      addPlatform(x + 300, groundY - 48, 58, 48);
+    } else if (pattern === 2) {
+      addPlatform(x + 135, groundY - 65, 80, 65);
+      addHazard("saw", x + 295, groundY - 42, 40, 40);
+    } else {
+      addPlatform(x + 100, groundY - 52, 62, 52);
+      addSpikeRow(x + 220, 3);
+    }
+    return;
+  }
+
+  // Area 3: taller blocks and block-and-hazard combinations.
+  if (area === 2) {
+    if (pattern === 0) {
+      addPlatform(x + 90, groundY - 65, 72, 65);
+      addPlatform(x + 200, groundY - 85, 76, 85);
+      addPlatform(x + 315, groundY - 55, 65, 55);
+    } else if (pattern === 1) {
+      addPlatform(x + 120, groundY - 75, 90, 75);
+      addHazard("orb", x + 285, 205, 34, 34);
+    } else if (pattern === 2) {
+      addPlatform(x + 100, groundY - 55, 60, 55);
+      addPlatform(x + 205, groundY - 55, 60, 55);
+      addHazard("laser", x + 330, 205, 22, 125);
+    } else {
+      addPlatform(x + 110, groundY - 85, 82, 85);
+      addSpikeRow(x + 255, 2);
+    }
+    return;
+  }
+
+  // Areas 4 and 5: fast block routes mixed with dangerous gaps.
+  if (pattern === 0) {
+    addPlatform(x + 90, groundY - 70, 74, 70);
+    addPlatform(x + 195, groundY - 95, 80, 95);
+    addPlatform(x + 315, groundY - 65, 68, 65);
+  } else if (pattern === 1) {
+    addPlatform(x + 105, groundY - 58, 68, 58);
+    addHazard("saw", x + 220, groundY - 43, 42, 42);
+    addPlatform(x + 310, groundY - 78, 76, 78);
+  } else if (pattern === 2) {
+    addPlatform(x + 105, groundY - 82, 90, 82);
+    addPlatform(x + 245, groundY - 60, 72, 60);
+    addHazard("orb", x + 350, 205, 34, 34);
+  } else {
+    addPlatform(x + 90, groundY - 62, 65, 62);
+    addPlatform(x + 190, groundY - 62, 65, 62);
+    addHazard("laser", x + 315, 195, 22, 135);
   }
 }
 
