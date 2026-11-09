@@ -94,8 +94,48 @@ let won = false;
 let sectionFlash = 0;
 
 let ghostRun = [];
-let previousGhost = null;
 
+const BEST_RUN_KEY = "pulseRunnerBestRunV1";
+
+function loadBestRun() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(BEST_RUN_KEY));
+    if (!saved || !Array.isArray(saved.path)) {
+      return { distance: 0, path: null };
+    }
+
+    const path = saved.path.filter(point =>
+      Number.isFinite(point.x) && Number.isFinite(point.y)
+    );
+
+    return {
+      distance: Number(saved.distance) || 0,
+      path: path.length ? path : null
+    };
+  } catch {
+    return { distance: 0, path: null };
+  }
+}
+
+const savedBestRun = loadBestRun();
+let bestDistance = savedBestRun.distance;
+let bestGhost = savedBestRun.path;
+
+function saveBestRun() {
+  if (worldX <= bestDistance || ghostRun.length < 2) return;
+
+  bestDistance = worldX;
+  bestGhost = ghostRun.slice();
+
+  try {
+    localStorage.setItem(
+      BEST_RUN_KEY,
+      JSON.stringify({ distance: bestDistance, path: bestGhost })
+    );
+  } catch {
+    // The run still works if browser storage is unavailable.
+  }
+}
 let audio = null;
 let musicTimer = null;
 let musicOn = true;
@@ -221,7 +261,6 @@ function ensureWorld() {
 }
 
 function resetGame() {
-  if (ghostRun.length > 5) previousGhost = ghostRun.slice();
 
   worldX = 0;
   objects = [];
@@ -346,7 +385,8 @@ function die() {
   crashed = true;
   playing = false;
   grounded = false;
-  previousGhost = ghostRun.slice();
+  ghostRun.push({ x: worldX, y: player.y });
+saveBestRun(); 
 }
 
 function update(dt) {
@@ -602,12 +642,13 @@ function draw() {
   ctx.fillRect(22, 42, W - 44, 7);
   ctx.fillStyle = section.ground;
   ctx.fillRect(22, 42, (W - 44) * percent / 100, 7);
-
-  if (previousGhost) {
-    ctx.fillStyle = "#60f4ff";
-    ctx.font = "bold 12px system-ui";
-    ctx.fillText("GHOST RUN", 22, 68);
-  }
+  
+if (bestGhost) {
+  const bestPercent = Math.floor(bestDistance / totalLength * 100);
+  ctx.fillStyle = "#60f4ff";
+  ctx.font = "bold 12px system-ui";
+  ctx.fillText(`BEST GHOST · ${bestPercent}%`, 22, 68);
+}
 
   if (!playing) {
     ctx.fillStyle = "#060916cc";
