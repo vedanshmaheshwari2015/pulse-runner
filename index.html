@@ -43,7 +43,8 @@ const areas = [
   { name: "THE VOID", sky: "#211633", ground: "#ff64db", accent: "#72a5ff", root: 164 }
 ];
 
-let worldX, objects, floors, nextChunk, score, level, speed;
+let worldX = 0, objects = [], floors = [], nextChunk = 0;
+let score = 0, level = 1, speed = 9;
 let playing = false, crashed = false, won = false, levelFlash = 0;
 let audio = null, musicTimer = null, musicOn = true, beat = 0;
 
