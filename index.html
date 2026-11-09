@@ -49,7 +49,7 @@ let playing = false, crashed = false, won = false, levelFlash = 0;
 let audio = null, musicTimer = null, musicOn = true, beat = 0;
 
 function reset() {
-  worldX = 0; objects = []; floors = []; nextChunk = 0;
+ worldX = 0; objects = []; floors = [{ x: 0, w: 900 }]; nextChunk = 900;
   score = 0; level = 1; speed = 9;
   player.y = groundY - player.size; player.vy = 0;
   playing = true; crashed = false; won = false; levelFlash = 0;
