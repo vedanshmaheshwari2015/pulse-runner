@@ -21,6 +21,11 @@
     h1 { margin: 0 0 8px; letter-spacing: .12em; }
     p { color: #bac4e4; }
 
+    .game-frame {
+      position: relative;
+      width: 100%;
+    }
+
     canvas {
       display: block;
       width: 100%;
@@ -31,15 +36,165 @@
     }
 
     .hint { font-size: 14px; line-height: 1.6; }
+
+    .overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      border-radius: 12px;
+      background: #060916cc;
+      text-align: center;
+    }
+
+    .overlay[hidden], .pause-button[hidden] {
+      display: none;
+    }
+
+    .panel {
+      width: min(440px, 100%);
+      padding: 24px;
+      border: 1px solid #45527b;
+      border-radius: 16px;
+      background: #111a32f2;
+      box-shadow: 0 18px 60px #0008;
+    }
+
+    .panel h2 {
+      margin: 0 0 10px;
+      color: #45f0c5;
+      letter-spacing: .06em;
+    }
+
+    .panel p { margin: 0 0 18px; }
+
+    button, select, input {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 11px 16px;
+      background: #45f0c5;
+      color: #08131c;
+      font-weight: 750;
+      cursor: pointer;
+    }
+
+    button:hover { filter: brightness(1.1); }
+
+    button.secondary {
+      margin-left: 8px;
+      background: #344365;
+      color: #fff;
+    }
+
+    .pause-button {
+      position: absolute;
+      z-index: 1;
+      top: 16px;
+      right: 16px;
+      padding: 9px 13px;
+      border: 1px solid #ffffff55;
+      background: #101a35e8;
+      color: #fff;
+    }
+
+    .setting {
+      margin: 18px 0;
+      text-align: left;
+    }
+
+    .setting label {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 7px;
+      color: #f4f6ff;
+      font-weight: 650;
+    }
+
+    .setting output { color: #45f0c5; }
+
+    .setting input[type="range"] {
+      width: 100%;
+      accent-color: #45f0c5;
+    }
+
+    .setting select {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid #45527b;
+      border-radius: 8px;
+      background: #0b1020;
+      color: #fff;
+    }
+
+    .settings-actions { margin-top: 20px; }
   </style>
 </head>
 <body>
 <main>
   <h1>PULSE RUNNER</h1>
   <p>One long run through five different sections.</p>
-  <canvas id="game" width="1000" height="420"></canvas>
+
+  <div class="game-frame">
+    <canvas id="game" width="1000" height="420"></canvas>
+
+    <button id="pauseButton" class="pause-button" hidden>Ⅱ Pause</button>
+
+    <div id="menuOverlay" class="overlay">
+      <div class="panel">
+        <h2 id="menuTitle">PULSE RUNNER</h2>
+        <p id="menuMessage">Press Start when you’re ready. The first obstacle is far ahead.</p>
+        <button id="mainButton">Start Game</button>
+        <button id="menuSettingsButton" class="secondary">Settings</button>
+      </div>
+    </div>
+
+    <div id="settingsOverlay" class="overlay" hidden>
+      <div class="panel">
+        <h2>SETTINGS</h2>
+
+        <div class="setting">
+          <label for="speedSetting">
+            <span>Game speed</span>
+            <output id="speedOutput">1.00×</output>
+          </label>
+          <input id="speedSetting" type="range" min="0.70" max="1.20" step="0.05" value="1">
+        </div>
+
+        <div class="setting">
+          <label for="musicVoice">Music voice</label>
+          <select id="musicVoice">
+            <option value="triangle">Soft pulse</option>
+            <option value="sine">Smooth tone</option>
+            <option value="square">Chiptune</option>
+            <option value="sawtooth">Synth</option>
+          </select>
+        </div>
+
+        <div class="setting">
+          <label for="volumeSetting">
+            <span>Music volume</span>
+            <output id="volumeOutput">35%</output>
+          </label>
+          <input id="volumeSetting" type="range" min="0" max="0.10" step="0.005" value="0.035">
+        </div>
+
+        <div class="settings-actions">
+          <button id="previewButton">Preview music</button>
+          <button id="closeSettingsButton" class="secondary">Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <p class="hint">
-    Space / ↑ / click / tap: jump · M: music on/off · R: restart<br>
+    Space / ↑ / click / tap: jump · P: pause · M: music on/off · R: restart<br>
     The cyan ghost shows your best run saved in this browser.
   </p>
 </main>
@@ -61,7 +216,9 @@ const totalLength = sectionLength * sectionCount;
 const fixedStep = 1 / 120;
 const gravity = 1700;
 const jumpVelocity = -660;
+
 const BEST_RUN_KEY = "pulseRunnerBestRunV1";
+const SETTINGS_KEY = "pulseRunnerSettingsV1";
 
 const sections = [
   { name: "NEON CITY", sky: "#101a35", ground: "#39e8c2", accent: "#8a7dff", root: 220 },
@@ -79,20 +236,36 @@ const player = {
   rotation: 0
 };
 
+const menuOverlay = document.querySelector("#menuOverlay");
+const settingsOverlay = document.querySelector("#settingsOverlay");
+const menuTitle = document.querySelector("#menuTitle");
+const menuMessage = document.querySelector("#menuMessage");
+const mainButton = document.querySelector("#mainButton");
+const pauseButton = document.querySelector("#pauseButton");
+
+const speedSetting = document.querySelector("#speedSetting");
+const speedOutput = document.querySelector("#speedOutput");
+const musicVoice = document.querySelector("#musicVoice");
+const volumeSetting = document.querySelector("#volumeSetting");
+const volumeOutput = document.querySelector("#volumeOutput");
+
 let worldX = 0;
 let objects = [];
 let floors = [{ x: 0, w: safeStart }];
 let nextChunk = safeStart;
 let sectionIndex = 0;
 let speed = 340;
+let speedMultiplier = 1;
 let grounded = true;
 let jumpBuffer = 0;
 let coyoteTime = 0;
 
 let playing = false;
+let paused = false;
 let crashed = false;
 let won = false;
 let sectionFlash = 0;
+let menuState = "start";
 
 let ghostRun = [];
 
@@ -123,6 +296,52 @@ const savedBestRun = loadBestRun();
 let bestDistance = savedBestRun.distance;
 let bestGhost = savedBestRun.path;
 
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    if (!saved) return {};
+
+    return {
+      speedMultiplier: Number.isFinite(saved.speedMultiplier)
+        ? Math.min(1.2, Math.max(0.7, saved.speedMultiplier))
+        : 1,
+      musicVoice: ["triangle", "sine", "square", "sawtooth"].includes(saved.musicVoice)
+        ? saved.musicVoice
+        : "triangle",
+      musicVolume: Number.isFinite(saved.musicVolume)
+        ? Math.min(0.1, Math.max(0, saved.musicVolume))
+        : 0.035
+    };
+  } catch {
+    return {};
+  }
+}
+
+const savedSettings = loadSettings();
+speedMultiplier = savedSettings.speedMultiplier ?? 1;
+let musicWave = savedSettings.musicVoice ?? "triangle";
+let musicVolume = savedSettings.musicVolume ?? 0.035;
+
+function saveSettings() {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      speedMultiplier,
+      musicVoice: musicWave,
+      musicVolume
+    }));
+  } catch {
+    // Settings still work for the current page if storage is unavailable.
+  }
+}
+
+function syncSettingsControls() {
+  speedSetting.value = String(speedMultiplier);
+  speedOutput.value = `${speedMultiplier.toFixed(2)}×`;
+  musicVoice.value = musicWave;
+  volumeSetting.value = String(musicVolume);
+  volumeOutput.value = `${Math.round(musicVolume * 1000)}%`;
+}
+
 function saveBestRun() {
   if (worldX <= bestDistance || ghostRun.length < 2) return;
 
@@ -132,10 +351,7 @@ function saveBestRun() {
   try {
     localStorage.setItem(
       BEST_RUN_KEY,
-      JSON.stringify({
-        distance: bestDistance,
-        path: bestGhost
-      })
+      JSON.stringify({ distance: bestDistance, path: bestGhost })
     );
   } catch {
     // The game still works if browser storage is unavailable.
@@ -177,7 +393,6 @@ function makeChunk(x) {
   );
   const sectionEnd = (area + 1) * sectionLength;
 
-  // Leave a clear transition between sections.
   if (x + chunkSize > sectionEnd) {
     floors.push({ x, w: chunkSize });
     return;
@@ -219,7 +434,7 @@ function makeChunk(x) {
   }
 
   if (area === 1) {
-    // CRYSTAL CAVES: climbable steps, all within the jump height.
+    // CRYSTAL CAVES: climbable steps within the jump height.
     if (pattern === 0) {
       addBlock(x + 115, 42, 64);
       addBlock(x + 230, 58, 68);
@@ -266,8 +481,40 @@ function ensureWorld() {
   floors = floors.filter(floor => floor.x + floor.w > worldX - 100);
 }
 
+function showMenu(state) {
+  menuState = state;
+
+  if (state === "playing") {
+    menuOverlay.hidden = true;
+    settingsOverlay.hidden = true;
+    pauseButton.hidden = false;
+    return;
+  }
+
+  pauseButton.hidden = true;
+  menuOverlay.hidden = false;
+
+  if (state === "start") {
+    menuTitle.textContent = "PULSE RUNNER";
+    menuMessage.textContent = "Press Start when you’re ready. The first obstacle is far ahead.";
+    mainButton.textContent = "Start Game";
+  } else if (state === "paused") {
+    menuTitle.textContent = "PAUSED";
+    menuMessage.textContent = "Take a break. Your run is waiting.";
+    mainButton.textContent = "Resume";
+  } else if (state === "dead") {
+    menuTitle.textContent = "YOU DIED";
+    menuMessage.textContent =
+      `You reached ${Math.floor(worldX / totalLength * 100)}%. Try again to beat your best.`;
+    mainButton.textContent = "Retry";
+  } else if (state === "won") {
+    menuTitle.textContent = "RUN COMPLETE!";
+    menuMessage.textContent = "You made it through all five sections.";
+    mainButton.textContent = "Play Again";
+  }
+}
+
 function resetGame() {
-  // Save this attempt first if it beat the stored best.
   saveBestRun();
 
   worldX = 0;
@@ -286,6 +533,7 @@ function resetGame() {
   player.rotation = 0;
 
   playing = true;
+  paused = false;
   crashed = false;
   won = false;
   sectionFlash = 0;
@@ -296,23 +544,51 @@ function resetGame() {
 
   ensureWorld();
   startMusic();
+  showMenu("playing");
 }
 
 function jump() {
   if (!playing) {
+    if (menuState === "paused") return;
     resetGame();
     jumpBuffer = 0.14;
     return;
   }
 
-  // Buffer taps briefly so a near-landing jump still registers.
   jumpBuffer = 0.14;
+}
+
+function pauseGame() {
+  if (!playing) return;
+
+  playing = false;
+  paused = true;
+  stopMusic();
+  showMenu("paused");
+}
+
+function resumeGame() {
+  if (!paused) return;
+
+  paused = false;
+  playing = true;
+  startMusic();
+  showMenu("playing");
 }
 
 function keyHandler(event) {
   if (["Space", "ArrowUp", "KeyW"].includes(event.code)) {
     event.preventDefault();
-    if (!event.repeat) jump();
+
+    if (!event.repeat) {
+      if (menuState === "paused") resumeGame();
+      else jump();
+    }
+  }
+
+  if (event.code === "KeyP") {
+    if (playing) pauseGame();
+    else if (paused) resumeGame();
   }
 
   if (event.code === "KeyM") {
@@ -322,10 +598,58 @@ function keyHandler(event) {
   }
 
   if (event.code === "KeyR") resetGame();
+
+  if (event.code === "Escape" && !settingsOverlay.hidden) {
+    settingsOverlay.hidden = true;
+  }
 }
 
 addEventListener("keydown", keyHandler);
 canvas.addEventListener("pointerdown", jump);
+
+mainButton.addEventListener("click", () => {
+  if (menuState === "paused") resumeGame();
+  else resetGame();
+});
+
+pauseButton.addEventListener("click", pauseGame);
+
+document.querySelector("#menuSettingsButton").addEventListener("click", () => {
+  settingsOverlay.hidden = false;
+});
+
+document.querySelector("#closeSettingsButton").addEventListener("click", () => {
+  settingsOverlay.hidden = true;
+});
+
+speedSetting.addEventListener("input", () => {
+  speedMultiplier = Number(speedSetting.value);
+  speedOutput.value = `${speedMultiplier.toFixed(2)}×`;
+  saveSettings();
+});
+
+musicVoice.addEventListener("change", () => {
+  musicWave = musicVoice.value;
+  saveSettings();
+});
+
+volumeSetting.addEventListener("input", () => {
+  musicVolume = Number(volumeSetting.value);
+  volumeOutput.value = `${Math.round(musicVolume * 1000)}%`;
+  saveSettings();
+});
+
+document.querySelector("#previewButton").addEventListener("click", () => {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+
+  if (!audio) audio = new AudioContextClass();
+  audio.resume();
+
+  const root = sections[sectionIndex].root;
+  playTone(root, 0.25, musicWave, 1);
+  playTone(root * 1.5, 0.25, musicWave, 0.7);
+});
 
 function startMusic() {
   if (!musicOn) return;
@@ -346,10 +670,10 @@ function startMusic() {
     const step = scale[(beat * 3 + sectionIndex) % scale.length];
     const note = section.root * Math.pow(2, step / 12);
 
-    playTone(note, beat % 4 === 0 ? 0.15 : 0.07, "triangle");
+    playTone(note, beat % 4 === 0 ? 0.15 : 0.07, musicWave, 1);
 
     if (beat % 4 === 0) {
-      playTone(section.root / 2, 0.12, "sine");
+      playTone(section.root / 2, 0.12, musicWave, 0.55);
     }
 
     beat++;
@@ -363,15 +687,18 @@ function stopMusic() {
   }
 }
 
-function playTone(frequency, duration, wave) {
+function playTone(frequency, duration, wave, volumeScale = 1) {
+  if (!audio || musicVolume <= 0) return;
+
   const oscillator = audio.createOscillator();
   const gain = audio.createGain();
+  const peak = Math.max(0.0001, musicVolume * volumeScale);
 
   oscillator.type = wave;
   oscillator.frequency.value = frequency;
 
   gain.gain.setValueAtTime(0.0001, audio.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.035, audio.currentTime + 0.015);
+  gain.gain.exponentialRampToValueAtTime(peak, audio.currentTime + 0.015);
   gain.gain.exponentialRampToValueAtTime(
     0.0001,
     audio.currentTime + duration
@@ -399,6 +726,8 @@ function die() {
   crashed = true;
   playing = false;
   grounded = false;
+  stopMusic();
+  showMenu("dead");
 }
 
 function update(dt) {
@@ -421,7 +750,7 @@ function update(dt) {
   }
 
   const sectionProgress = (worldX % sectionLength) / sectionLength;
-  speed = 340 + sectionIndex * 12 + sectionProgress * 12;
+  speed = (340 + sectionIndex * 12 + sectionProgress * 12) * speedMultiplier;
 
   worldX += speed * dt;
   ensureWorld();
@@ -439,7 +768,7 @@ function update(dt) {
     h: player.size
   };
 
-  // Land on block tops; a side impact is deadly.
+  // Land on block tops; side impacts are deadly.
   for (const object of objects) {
     if (object.type !== "block") continue;
 
@@ -463,7 +792,7 @@ function update(dt) {
     }
   }
 
-  // Land only when there is ground under the player.
+  // Land only when the player is above a floor segment.
   if (!grounded) {
     const centerX = worldX + player.x + player.size / 2;
     const hasFloor = floors.some(
@@ -523,6 +852,8 @@ function update(dt) {
     playing = false;
     won = true;
     saveBestRun();
+    stopMusic();
+    showMenu("won");
   }
 
   if (sectionFlash > 0) sectionFlash -= dt;
@@ -538,7 +869,6 @@ function ghostYAt(distance) {
 
   while (low < high) {
     const mid = Math.floor((low + high) / 2);
-
     if (bestGhost[mid].x < distance) low = mid + 1;
     else high = mid;
   }
@@ -602,13 +932,7 @@ function draw() {
     } else if (object.type === "saw") {
       ctx.fillStyle = "#ffd15c";
       ctx.beginPath();
-      ctx.arc(
-        x + object.w / 2,
-        object.y + object.h / 2,
-        object.w / 2,
-        0,
-        Math.PI * 2
-      );
+      ctx.arc(x + object.w / 2, object.y + object.h / 2, object.w / 2, 0, Math.PI * 2);
       ctx.fill();
 
       ctx.strokeStyle = "#713a43";
@@ -627,7 +951,7 @@ function draw() {
     }
   }
 
-  // Draw the saved best run as a translucent cyan ghost.
+  // Best-run ghost.
   const ghostY = ghostYAt(worldX);
 
   if (ghostY !== null) {
@@ -638,15 +962,10 @@ function draw() {
     ctx.restore();
   }
 
-  // Draw the player.
+  // Player.
   ctx.save();
-  ctx.translate(
-    player.x + player.size / 2,
-    player.y + player.size / 2
-  );
-
+  ctx.translate(player.x + player.size / 2, player.y + player.size / 2);
   if (!grounded) ctx.rotate(player.rotation);
-
   ctx.fillStyle = "#f8f7ff";
   ctx.fillRect(-player.size / 2, -player.size / 2, player.size, player.size);
   ctx.fillStyle = section.accent;
@@ -679,41 +998,7 @@ function draw() {
     ctx.fillText(`BEST GHOST · ${bestPercent}%`, 22, 68);
   }
 
-  if (!playing) {
-    ctx.fillStyle = "#060916cc";
-    ctx.fillRect(0, 0, W, H);
-    ctx.textAlign = "center";
-    ctx.fillStyle = section.ground;
-    ctx.font = "bold 38px system-ui";
-
-    if (won) ctx.fillText("RUN COMPLETE!", W / 2, 165);
-    else if (crashed) ctx.fillText("YOU DIED", W / 2, 165);
-    else ctx.fillText("PULSE RUNNER", W / 2, 165);
-
-    ctx.fillStyle = "#fff";
-    ctx.font = "20px system-ui";
-
-    if (won) {
-      ctx.fillText("Press Space or tap to run again.", W / 2, 210);
-    } else if (crashed) {
-      ctx.fillText(
-        `You reached ${percent}%. Press Space or tap to retry.`,
-        W / 2,
-        210
-      );
-    } else {
-      ctx.fillText("Press Space or tap to start.", W / 2, 210);
-      ctx.font = "15px system-ui";
-      ctx.fillStyle = "#bdc9e8";
-      ctx.fillText(
-        "The first obstacle is far ahead. Jump with Space, ↑, or a tap.",
-        W / 2,
-        244
-      );
-    }
-
-    ctx.textAlign = "left";
-  } else if (sectionFlash > 0) {
+  if (sectionFlash > 0 && playing) {
     ctx.fillStyle = "#07101dcc";
     ctx.fillRect(250, 145, 500, 80);
     ctx.textAlign = "center";
@@ -740,6 +1025,8 @@ function frame(timestamp) {
   requestAnimationFrame(frame);
 }
 
+syncSettingsControls();
+showMenu("start");
 requestAnimationFrame(frame);
 </script>
 </body>
