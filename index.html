@@ -54,18 +54,20 @@ const W = canvas.width;
 const H = canvas.height;
 const groundY = 330;
 const chunkSize = 460;
-const safeStart = 1000;
+const safeStart = 1100;
 const sectionLength = 9200;
 const sectionCount = 5;
 const totalLength = sectionLength * sectionCount;
 const fixedStep = 1 / 120;
+const gravity = 1700;
+const jumpVelocity = -660;
 
 const sections = [
-  { name: "BLOCK RUN", sky: "#101a35", ground: "#39e8c2", accent: "#8a7dff", root: 220 },
-  { name: "SPIKE FIELD", sky: "#162039", ground: "#63d8ff", accent: "#ff5478", root: 196 },
-  { name: "SAW WORKS", sky: "#291b32", ground: "#ff945e", accent: "#ffd15c", root: 174 },
-  { name: "LASER GRID", sky: "#102a38", ground: "#f6ed78", accent: "#4cf0d5", root: 247 },
-  { name: "THE ABYSS", sky: "#211633", ground: "#ff64db", accent: "#72a5ff", root: 164 }
+  { name: "NEON CITY", sky: "#101a35", ground: "#39e8c2", accent: "#8a7dff", root: 220 },
+  { name: "CRYSTAL CAVES", sky: "#10243a", ground: "#63d8ff", accent: "#b27dff", root: 196 },
+  { name: "EMBER RUINS", sky: "#351b28", ground: "#ff945e", accent: "#ff5278", root: 174 },
+  { name: "SKY CIRCUIT", sky: "#142a42", ground: "#f6ed78", accent: "#4cf0d5", root: 247 },
+  { name: "THE VOID", sky: "#211633", ground: "#ff64db", accent: "#72a5ff", root: 164 }
 ];
 
 const player = {
@@ -81,8 +83,10 @@ let objects = [];
 let floors = [{ x: 0, w: safeStart }];
 let nextChunk = safeStart;
 let sectionIndex = 0;
-let speed = 370;
+let speed = 340;
 let grounded = true;
+let jumpBuffer = 0;
+let coyoteTime = 0;
 
 let playing = false;
 let crashed = false;
@@ -127,26 +131,24 @@ function makeChunk(x) {
   );
   const sectionEnd = (area + 1) * sectionLength;
 
-  // Keep section transitions clear and avoid patterns crossing into
-  // the next section.
+  // Leave a clear transition between sections.
   if (x + chunkSize > sectionEnd) {
     floors.push({ x, w: chunkSize });
     return;
   }
 
-  const chunkInArea = Math.floor((x - area * sectionLength) / chunkSize);
-  const pattern = chunkInArea % 3;
+  const localChunk = Math.floor((x - area * sectionLength) / chunkSize);
+  const pattern = localChunk % 3;
 
-  // Each section uses one obstacle family.
   if (area === 4) {
-    // Section 5: gaps only.
+    // THE VOID: gaps only. Every other chunk stays safe.
     if (pattern === 1) {
       floors.push({ x, w: chunkSize });
       return;
     }
 
     const pitStart = x + 190;
-    const pitWidth = 175 + pattern * 12;
+    const pitWidth = 150 + pattern * 10;
     const pitEnd = pitStart + pitWidth;
 
     floors.push({ x, w: pitStart - x });
@@ -157,44 +159,52 @@ function makeChunk(x) {
   floors.push({ x, w: chunkSize });
 
   if (area === 0) {
-    // Section 1: climbable blocks only.
+    // NEON CITY: low blocks.
     if (pattern === 0) {
-      addBlock(x + 175, 54, 62);
+      addBlock(x + 175, 48, 60);
     } else if (pattern === 1) {
-      addBlock(x + 125, 48, 58);
-      addBlock(x + 275, 66, 68);
+      addBlock(x + 125, 44, 56);
+      addBlock(x + 270, 58, 62);
     } else {
-      addBlock(x + 105, 44, 56);
-      addBlock(x + 215, 72, 66);
-      addBlock(x + 335, 54, 58);
+      addBlock(x + 110, 52, 58);
+      addBlock(x + 245, 62, 64);
     }
     return;
   }
 
   if (area === 1) {
-    // Section 2: spikes only.
-    addSpikeRow(x + 175, pattern + 1);
-    return;
-  }
-
-  if (area === 2) {
-    // Section 3: saws only.
-    const count = pattern === 0 ? 1 : 2;
-    for (let i = 0; i < count; i++) {
-      addHazard("saw", x + 180 + i * 115, groundY - 44, 40, 40);
+    // CRYSTAL CAVES: climbable steps.
+    // Every block is under 70 px tall; the jump can rise about 128 px.
+    if (pattern === 0) {
+      addBlock(x + 115, 42, 64);
+      addBlock(x + 230, 58, 68);
+      addBlock(x + 345, 48, 64);
+    } else if (pattern === 1) {
+      addBlock(x + 135, 52, 72);
+      addBlock(x + 270, 66, 72);
+    } else {
+      addBlock(x + 105, 44, 62);
+      addBlock(x + 215, 60, 68);
+      addBlock(x + 330, 68, 70);
     }
     return;
   }
 
-  // Section 4: lasers only. Their tops are low enough to jump over.
+  if (area === 2) {
+    // EMBER RUINS: spikes only.
+    addSpikeRow(x + 175, pattern + 1);
+    return;
+  }
+
+  // SKY CIRCUIT: jumpable laser gates only.
   const count = pattern === 2 ? 2 : 1;
   for (let i = 0; i < count; i++) {
-    const laserHeight = 100 + pattern * 8;
+    const laserHeight = 88 + pattern * 5;
     addHazard(
       "laser",
-      x + 205 + i * 125,
+      x + 205 + i * 145,
       groundY - laserHeight,
-      22,
+      20,
       laserHeight
     );
   }
@@ -206,14 +216,12 @@ function ensureWorld() {
     nextChunk += chunkSize;
   }
 
-  objects = objects.filter(o => o.x + o.w > worldX - 100);
-  floors = floors.filter(f => f.x + f.w > worldX - 100);
+  objects = objects.filter(object => object.x + object.w > worldX - 100);
+  floors = floors.filter(floor => floor.x + floor.w > worldX - 100);
 }
 
 function resetGame() {
-  if (ghostRun.length > 5) {
-    previousGhost = ghostRun.slice();
-  }
+  if (ghostRun.length > 5) previousGhost = ghostRun.slice();
 
   worldX = 0;
   objects = [];
@@ -221,8 +229,10 @@ function resetGame() {
   nextChunk = safeStart;
 
   sectionIndex = 0;
-  speed = 370;
+  speed = 340;
   grounded = true;
+  jumpBuffer = 0;
+  coyoteTime = 0;
 
   player.y = groundY - player.size;
   player.vy = 0;
@@ -244,13 +254,12 @@ function resetGame() {
 function jump() {
   if (!playing) {
     resetGame();
+    jumpBuffer = 0.14;
     return;
   }
 
-  if (grounded) {
-    player.vy = -670;
-    grounded = false;
-  }
+  // Buffer taps briefly so a near-landing jump still registers.
+  jumpBuffer = 0.14;
 }
 
 function keyHandler(event) {
@@ -343,9 +352,10 @@ function die() {
 function update(dt) {
   if (!playing) return;
 
-  const oldWorldX = worldX;
-  const oldY = player.y;
-  const oldBottom = oldY + player.size;
+  jumpBuffer = Math.max(0, jumpBuffer - dt);
+  coyoteTime = Math.max(0, coyoteTime - dt);
+
+  const oldBottom = player.y + player.size;
 
   const newSection = Math.min(
     sectionCount - 1,
@@ -359,12 +369,12 @@ function update(dt) {
   }
 
   const sectionProgress = (worldX % sectionLength) / sectionLength;
-  speed = 370 + sectionIndex * 18 + sectionProgress * 18;
+  speed = 340 + sectionIndex * 12 + sectionProgress * 12;
 
   worldX += speed * dt;
   ensureWorld();
 
-  player.vy += 1800 * dt;
+  player.vy += gravity * dt;
   player.y += player.vy * dt;
   player.rotation += speed * dt * 0.012;
 
@@ -377,7 +387,7 @@ function update(dt) {
     h: player.size
   };
 
-  // Blocks are solid: land on top, die on a side impact.
+  // Blocks can be landed on from above. Side impacts are deadly.
   for (const object of objects) {
     if (object.type !== "block") continue;
 
@@ -386,7 +396,7 @@ function update(dt) {
       playerWorld.x + playerWorld.w > object.x;
 
     const crossedTop =
-      oldBottom <= object.y + 3 &&
+      oldBottom <= object.y + 4 &&
       player.y + player.size >= object.y &&
       player.vy >= 0;
 
@@ -401,7 +411,7 @@ function update(dt) {
     }
   }
 
-  // Land only when the player is over a floor segment.
+  // Land only when the player is above a floor segment.
   if (!grounded) {
     const centerX = worldX + player.x + player.size / 2;
     const hasFloor = floors.some(
@@ -425,7 +435,6 @@ function update(dt) {
   for (const object of objects) {
     if (object.type === "block") continue;
 
-    // Slightly smaller hitbox for spikes makes their tips fairer.
     const hitbox = object.type === "spike"
       ? {
           x: object.x + 5,
@@ -444,6 +453,16 @@ function update(dt) {
   if (player.y > H + 45) {
     die();
     return;
+  }
+
+  if (grounded) coyoteTime = 0.12;
+
+  // A short grace period lets jumps work just after leaving a surface.
+  if (jumpBuffer > 0 && (grounded || coyoteTime > 0)) {
+    player.vy = jumpVelocity;
+    grounded = false;
+    jumpBuffer = 0;
+    coyoteTime = 0;
   }
 
   ghostRun.push({ x: worldX, y: player.y });
@@ -474,6 +493,7 @@ function ghostYAt(distance) {
   const after = previousGhost[low];
   const before = previousGhost[Math.max(0, low - 1)];
   const span = after.x - before.x;
+
   if (span <= 0) return after.y;
 
   const amount = (distance - before.x) / span;
@@ -486,7 +506,7 @@ function draw() {
   ctx.fillStyle = section.sky;
   ctx.fillRect(0, 0, W, H);
 
-  // Background lights move more slowly than the level.
+  // Distant lights move more slowly than the level.
   ctx.globalAlpha = 0.25;
   ctx.fillStyle = section.accent;
   for (let i = 0; i < 18; i++) {
@@ -495,7 +515,6 @@ function draw() {
   }
   ctx.globalAlpha = 1;
 
-  // Draw floor segments. Missing segments are deadly pits.
   for (const floor of floors) {
     const screenX = floor.x - worldX;
     ctx.fillStyle = "#263454";
@@ -547,7 +566,6 @@ function draw() {
     }
   }
 
-  // Replay the previous attempt as a translucent ghost.
   const ghostY = ghostYAt(worldX);
   if (ghostY !== null) {
     ctx.save();
@@ -557,7 +575,6 @@ function draw() {
     ctx.restore();
   }
 
-  // Player rotates while airborne, like a cube-style runner.
   ctx.save();
   ctx.translate(player.x + player.size / 2, player.y + player.size / 2);
   if (!grounded) ctx.rotate(player.rotation);
@@ -576,6 +593,7 @@ function draw() {
     22,
     30
   );
+
   ctx.textAlign = "right";
   ctx.fillText(`${percent}%`, W - 22, 30);
   ctx.textAlign = "left";
@@ -598,13 +616,9 @@ function draw() {
     ctx.fillStyle = section.ground;
     ctx.font = "bold 38px system-ui";
 
-    if (won) {
-      ctx.fillText("RUN COMPLETE!", W / 2, 165);
-    } else if (crashed) {
-      ctx.fillText("YOU DIED", W / 2, 165);
-    } else {
-      ctx.fillText("PULSE RUNNER", W / 2, 165);
-    }
+    if (won) ctx.fillText("RUN COMPLETE!", W / 2, 165);
+    else if (crashed) ctx.fillText("YOU DIED", W / 2, 165);
+    else ctx.fillText("PULSE RUNNER", W / 2, 165);
 
     ctx.fillStyle = "#fff";
     ctx.font = "20px system-ui";
@@ -622,7 +636,7 @@ function draw() {
       ctx.font = "15px system-ui";
       ctx.fillStyle = "#bdc9e8";
       ctx.fillText(
-        "A clear runway comes first. Jump with Space, ↑, or a tap.",
+        "The first obstacle is far ahead. Jump with Space, ↑, or a tap.",
         W / 2,
         244
       );
