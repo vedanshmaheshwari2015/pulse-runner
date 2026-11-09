@@ -7,170 +7,366 @@
   <style>
     * { box-sizing: border-box; }
     body {
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      background: #0b1020;
-      color: #f4f6ff;
-      font: 16px system-ui, sans-serif;
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      background: #080b18; color: #f4f6ff; font: 16px system-ui, sans-serif;
     }
-    main { width: min(900px, 94vw); }
-    h1 { margin: 0 0 8px; letter-spacing: .08em; }
+    main { width: min(1000px, 96vw); }
+    h1 { margin: 0 0 8px; letter-spacing: .12em; }
     p { color: #bac4e4; }
     canvas {
-      display: block;
-      width: 100%;
-      border: 2px solid #36456f;
-      border-radius: 12px;
-      background: #111a32;
-      touch-action: manipulation;
+      display: block; width: 100%; border: 2px solid #45527b;
+      border-radius: 12px; background: #10162b; touch-action: manipulation;
     }
     .hint { font-size: 14px; }
   </style>
 </head>
 <body>
-  <main>
-    <h1>PULSE RUNNER</h1>
-    <p>Jump over the blocks. How far can you go?</p>
-    <canvas id="game" width="900" height="360" aria-label="Pulse Runner game"></canvas>
-    <p class="hint">Press Space, ↑, or click/tap to jump. Press again after a crash to restart.</p>
-  </main>
+<main>
+  <h1>PULSE RUNNER</h1>
+  <p>Five areas. Hidden hazards. Find your path and survive.</p>
+  <canvas id="game" width="1000" height="420"></canvas>
+  <p class="hint">Space / ↑ / tap: jump · M: music · R: restart</p>
+</main>
 
-  <script>
-    const canvas = document.querySelector("#game");
-    const ctx = canvas.getContext("2d");
+<script>
+const canvas = document.querySelector("#game");
+const ctx = canvas.getContext("2d");
+const W = canvas.width, H = canvas.height, groundY = 330;
+const player = { x: 145, y: groundY - 34, size: 34, vy: 0 };
+const stageLength = 2600, stages = 5, totalLength = stageLength * stages;
 
-    const ground = 292;
-    const player = { x: 110, y: ground - 34, size: 34, vy: 0 };
-    let obstacles = [];
-    let score = 0;
-    let speed = 5;
-    let playing = false;
-    let crashed = false;
-    let frame = 0;
+const areas = [
+  { name: "NEON CITY", sky: "#101a35", ground: "#39e8c2", accent: "#8a7dff", root: 220 },
+  { name: "CRYSTAL CAVES", sky: "#10243a", ground: "#63d8ff", accent: "#b27dff", root: 196 },
+  { name: "EMBER RUINS", sky: "#351b28", ground: "#ff945e", accent: "#ff527a", root: 174 },
+  { name: "SKY CIRCUIT", sky: "#142a42", ground: "#f6ed78", accent: "#4cf0d5", root: 247 },
+  { name: "THE VOID", sky: "#211633", ground: "#ff64db", accent: "#72a5ff", root: 164 }
+];
 
-    function reset() {
-      player.y = ground - player.size;
+let worldX, objects, floors, nextChunk, score, level, speed;
+let playing = false, crashed = false, won = false, levelFlash = 0;
+let audio = null, musicTimer = null, musicOn = true, beat = 0;
+
+function reset() {
+  worldX = 0; objects = []; floors = []; nextChunk = 0;
+  score = 0; level = 1; speed = 9;
+  player.y = groundY - player.size; player.vy = 0;
+  playing = true; crashed = false; won = false; levelFlash = 0;
+  ensureWorld();
+  startMusic();
+}
+
+function addPlatform(x, y, w, h) {
+  objects.push({ type: "platform", x, y, w, h });
+}
+function addHazard(type, x, y, w, h) {
+  objects.push({ type, x, y, w, h });
+}
+function addSpikeRow(x, count, gap = 34) {
+  for (let i = 0; i < count; i++) {
+    addHazard("spike", x + i * gap, groundY - 34, 32, 34);
+  }
+}
+
+function makeChunk(x) {
+  const area = Math.min(stages - 1, Math.floor(x / stageLength));
+  const tough = area >= 1;
+  const gapChance = [0, .13, .20, .25, .30][area];
+  const hasPit = tough && Math.random() < gapChance;
+  const pitStart = x + 220 + Math.random() * 65;
+  const pitEnd = pitStart + 105 + Math.random() * 65;
+
+  if (hasPit) {
+    floors.push({ x, w: pitStart - x });
+    floors.push({ x: pitEnd, w: x + 460 - pitEnd });
+    // A raised route sometimes bridges the deadly gap.
+    if (Math.random() < .55) addPlatform(pitStart - 12, 245, pitEnd - pitStart + 24, 22);
+  } else {
+    floors.push({ x, w: 460 });
+  }
+
+  const pattern = Math.random();
+
+  // Climbable blocks and raised paths.
+  if (pattern < .24) {
+    addPlatform(x + 115, 270, 72, 60);
+    addPlatform(x + 220, 220, 105, 20);
+    if (area >= 2) addHazard("orb", x + 275, 178, 32, 32);
+  } else if (pattern < .43) {
+    addPlatform(x + 95, 250, 90, 80);
+    addPlatform(x + 220, 205, 105, 20);
+    addPlatform(x + 345, 250, 80, 80);
+  } else if (pattern < .63) {
+    addSpikeRow(x + 190, area >= 3 ? 3 : 2, 34);
+    if (area >= 2) addHazard("saw", x + 310, 268, 38, 38);
+  } else if (pattern < .80) {
+    addPlatform(x + 170, 265, 65, 65);
+    addHazard("laser", x + 295, 215, 24, 115);
+    if (area >= 3) addSpikeRow(x + 355, 2, 34);
+  } else {
+    addHazard("saw", x + 195, 265, 40, 40);
+    addHazard("orb", x + 295, 225, 34, 34);
+    if (area >= 2) addHazard("laser", x + 375, 200, 22, 130);
+  }
+
+  // A few areas hide an extra danger near a tempting platform.
+  if (area >= 2 && Math.random() < .35) {
+    addPlatform(x + 35, 235, 90, 20);
+    addHazard("spike", x + 82, 201, 34, 34);
+  }
+}
+
+function ensureWorld() {
+  while (nextChunk < worldX + W + 700) {
+    makeChunk(nextChunk);
+    nextChunk += 460;
+  }
+  objects = objects.filter(o => o.x + o.w > worldX - 100);
+  floors = floors.filter(f => f.x + f.w > worldX - 100);
+}
+
+function jump() {
+  if (!playing) {
+    reset();
+    return;
+  }
+  if (player.y >= groundY - player.size - 1) player.vy = -15;
+}
+
+function keyHandler(e) {
+  if (["Space", "ArrowUp", "KeyW"].includes(e.code)) {
+    e.preventDefault();
+    jump();
+  }
+  if (e.code === "KeyM") {
+    musicOn = !musicOn;
+    if (musicOn) startMusic();
+    else stopMusic();
+  }
+  if (e.code === "KeyR") reset();
+}
+addEventListener("keydown", keyHandler);
+canvas.addEventListener("pointerdown", jump);
+
+function startMusic() {
+  if (!musicOn) return;
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return;
+  if (!audio) audio = new AudioCtx();
+  audio.resume();
+  if (musicTimer) return;
+
+  beat = 0;
+  musicTimer = setInterval(() => {
+    if (!playing || !musicOn || !audio) return;
+    const area = areas[level - 1];
+    const scale = [0, 3, 5, 7, 10, 12, 15, 17];
+    const note = area.root * Math.pow(2, scale[(beat * 3 + level) % scale.length] / 12);
+    tone(note, beat % 4 === 0 ? .16 : .07, beat % 4 === 0 ? "triangle" : "sine");
+    if (beat % 4 === 0) tone(area.root / 2, .12, "sawtooth");
+    beat++;
+  }, 180);
+}
+function stopMusic() {
+  if (musicTimer) clearInterval(musicTimer);
+  musicTimer = null;
+}
+function tone(freq, duration, type) {
+  const osc = audio.createOscillator(), gain = audio.createGain();
+  osc.type = type; osc.frequency.value = freq;
+  gain.gain.setValueAtTime(.0001, audio.currentTime);
+  gain.gain.exponentialRampToValueAtTime(.055, audio.currentTime + .015);
+  gain.gain.exponentialRampToValueAtTime(.0001, audio.currentTime + duration);
+  osc.connect(gain); gain.connect(audio.destination);
+  osc.start(); osc.stop(audio.currentTime + duration + .02);
+}
+
+function overlaps(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function update() {
+  if (!playing) return;
+
+  const oldBottom = player.y + player.size;
+  const oldWorldX = worldX;
+  const oldPlayerRight = oldWorldX + player.x + player.size;
+
+  score += 0.12;
+  const newLevel = Math.min(stages, Math.floor(worldX / stageLength) + 1);
+  if (newLevel !== level) {
+    level = newLevel;
+    levelFlash = 90;
+    beat = 0;
+  }
+
+  speed = Math.min(17, 9 + (level - 1) * 1.6 + (worldX % stageLength) / stageLength * 1.1);
+  worldX += speed;
+  ensureWorld();
+
+  player.vy += .72;
+  player.y += player.vy;
+  let landed = false;
+
+  const playerWorld = { x: worldX + player.x, y: player.y, w: player.size, h: player.size };
+  for (const o of objects) {
+    if (o.type !== "platform") continue;
+    const overlapsX = playerWorld.x < o.x + o.w && playerWorld.x + playerWorld.w > o.x;
+    const crossedTop = oldBottom <= o.y + 5 && player.y + player.size >= o.y;
+    if (overlapsX && crossedTop && player.vy >= 0) {
+      player.y = o.y - player.size;
       player.vy = 0;
-      obstacles = [];
-      score = 0;
-      speed = 5;
-      frame = 0;
-      crashed = false;
-      playing = true;
+      landed = true;
+    } else if (overlaps(playerWorld, o)) {
+      crashed = true;
     }
+  }
 
-    function jump() {
-      if (!playing) reset();
-      if (crashed) {
-        reset();
-        return;
-      }
-      if (player.y >= ground - player.size - 1) player.vy = -13;
+  if (!landed) {
+    const centerX = worldX + player.x + player.size / 2;
+    const onFloor = floors.some(f => centerX >= f.x && centerX <= f.x + f.w);
+    if (onFloor && player.y + player.size >= groundY && player.vy >= 0) {
+      player.y = groundY - player.size;
+      player.vy = 0;
+      landed = true;
     }
+  }
 
-    addEventListener("keydown", event => {
-      if (["Space", "ArrowUp"].includes(event.code)) {
-        event.preventDefault();
-        jump();
+  // Deadly spikes, saws, orbs, and laser gates.
+  for (const o of objects) {
+    if (o.type === "platform") continue;
+    const hazard = { x: o.x, y: o.y, w: o.w, h: o.h };
+    if (overlaps(playerWorld, hazard)) crashed = true;
+  }
+
+  if (player.y > H + 40) crashed = true;
+  if (crashed) playing = false;
+  if (worldX >= totalLength) {
+    playing = false;
+    won = true;
+  }
+  if (levelFlash > 0) levelFlash--;
+}
+
+function draw() {
+  const area = areas[level - 1];
+  ctx.fillStyle = area.sky;
+  ctx.fillRect(0, 0, W, H);
+
+  // Distant lights and moving background lines.
+  ctx.globalAlpha = .25;
+  ctx.fillStyle = area.accent;
+  for (let i = 0; i < 16; i++) {
+    const x = ((i * 91 - worldX * .22) % (W + 80) + W + 80) % (W + 80);
+    ctx.fillRect(x, 70 + (i * 37) % 170, 3, 3);
+  }
+  ctx.globalAlpha = 1;
+
+  for (const f of floors) {
+    const sx = f.x - worldX;
+    ctx.fillStyle = "#263454";
+    ctx.fillRect(sx, groundY, f.w, H - groundY);
+    ctx.fillStyle = area.ground;
+    ctx.fillRect(sx, groundY, f.w, 4);
+  }
+
+  for (const o of objects) {
+    const x = o.x - worldX;
+    if (o.type === "platform") {
+      ctx.fillStyle = "#596a96";
+      ctx.fillRect(x, o.y, o.w, o.h);
+      ctx.fillStyle = area.ground;
+      ctx.fillRect(x, o.y, o.w, 5);
+      ctx.fillStyle = "#8291ba";
+      for (let bx = x + 12; bx < x + o.w; bx += 24) {
+        ctx.fillRect(bx, o.y + 12, 3, Math.max(4, o.h - 18));
       }
-    });
-    canvas.addEventListener("pointerdown", jump);
-
-    function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      // Subtle grid
-      ctx.strokeStyle = "#1a2748";
-      ctx.lineWidth = 1;
-      for (let x = 0; x < canvas.width; x += 45) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, ground);
-        ctx.stroke();
-      }
-
-      // Ground
-      ctx.fillStyle = "#26385e";
-      ctx.fillRect(0, ground, canvas.width, 4);
-      ctx.fillStyle = "#45f0c5";
-      ctx.fillRect(0, ground, canvas.width, 3);
-
-      // Player
-      ctx.fillStyle = "#8a7dff";
-      ctx.fillRect(player.x, player.y, player.size, player.size);
-      ctx.fillStyle = "#d9d5ff";
-      ctx.fillRect(player.x + 21, player.y + 8, 5, 5);
-
-      // Obstacles
+    } else if (o.type === "spike") {
       ctx.fillStyle = "#ff5478";
-      for (const obstacle of obstacles) {
-        ctx.beginPath();
-        ctx.moveTo(obstacle.x, ground);
-        ctx.lineTo(obstacle.x + obstacle.w / 2, ground - obstacle.h);
-        ctx.lineTo(obstacle.x + obstacle.w, ground);
-        ctx.closePath();
-        ctx.fill();
-      }
-
-      ctx.fillStyle = "#f4f6ff";
-      ctx.font = "bold 20px system-ui";
-      ctx.fillText(`SCORE  ${Math.floor(score)}`, 24, 34);
-
-      if (!playing || crashed) {
-        ctx.fillStyle = "rgba(5, 9, 22, .72)";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.textAlign = "center";
-        ctx.fillStyle = "#fff";
-        ctx.font = "bold 34px system-ui";
-        ctx.fillText(crashed ? "CRASH!" : "READY?", canvas.width / 2, 150);
-        ctx.font = "18px system-ui";
-        ctx.fillStyle = "#45f0c5";
-        ctx.fillText(
-          crashed ? "Tap or press Space to try again" : "Tap or press Space to start",
-          canvas.width / 2, 190
-        );
-        ctx.textAlign = "left";
-      }
+      ctx.beginPath();
+      ctx.moveTo(x, o.y + o.h);
+      ctx.lineTo(x + o.w / 2, o.y);
+      ctx.lineTo(x + o.w, o.y + o.h);
+      ctx.fill();
+    } else if (o.type === "saw") {
+      ctx.fillStyle = "#ffd15c";
+      ctx.beginPath();
+      ctx.arc(x + o.w/2, o.y + o.h/2, o.w/2, 0, Math.PI*2);
+      ctx.fill();
+      ctx.strokeStyle = "#713a43";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(x + 8, o.y + 8); ctx.lineTo(x + o.w - 8, o.y + o.h - 8);
+      ctx.moveTo(x + o.w - 8, o.y + 8); ctx.lineTo(x + 8, o.y + o.h - 8);
+      ctx.stroke();
+    } else if (o.type === "orb") {
+      ctx.fillStyle = "#ff4fbc";
+      ctx.beginPath();
+      ctx.arc(x + o.w/2, o.y + o.h/2, o.w/2, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(x + o.w/2 - 4, o.y + o.h/2 - 4, 4, 0, Math.PI*2);
+      ctx.fill();
+    } else if (o.type === "laser") {
+      ctx.fillStyle = "#ff365f";
+      ctx.fillRect(x, o.y, o.w, o.h);
+      ctx.fillStyle = "#ffd4df";
+      ctx.fillRect(x + 7, o.y, 5, o.h);
     }
+  }
 
-    function update() {
-      if (playing && !crashed) {
-        frame++;
-        score += 0.12;
-        speed = 5 + score / 100;
+  ctx.fillStyle = "#f8f7ff";
+  ctx.fillRect(player.x, player.y, player.size, player.size);
+  ctx.fillStyle = area.accent;
+  ctx.fillRect(player.x + 20, player.y + 8, 6, 6);
 
-        player.vy += 0.65;
-        player.y += player.vy;
-        if (player.y > ground - player.size) {
-          player.y = ground - player.size;
-          player.vy = 0;
-        }
+  const percent = Math.min(100, Math.floor(worldX / totalLength * 100));
+  ctx.fillStyle = "#fff";
+  ctx.font = "bold 17px system-ui";
+  ctx.fillText(`AREA ${level} / 5  ·  ${area.name}`, 22, 30);
+  ctx.textAlign = "right";
+  ctx.fillText(`${percent}%`, W - 22, 30);
+  ctx.textAlign = "left";
 
-        if (frame % 90 === 0) {
-          const h = 28 + Math.random() * 25;
-          obstacles.push({ x: canvas.width + 10, w: 28, h });
-        }
+  ctx.fillStyle = "#ffffff30";
+  ctx.fillRect(22, 42, W - 44, 7);
+  ctx.fillStyle = area.ground;
+  ctx.fillRect(22, 42, (W - 44) * percent / 100, 7);
 
-        for (const obstacle of obstacles) {
-          obstacle.x -= speed;
-          const hit =
-            player.x + player.size - 5 > obstacle.x &&
-            player.x + 5 < obstacle.x + obstacle.w &&
-            player.y + player.size - 4 > ground - obstacle.h;
-          if (hit) crashed = true;
-        }
-        obstacles = obstacles.filter(obstacle => obstacle.x + obstacle.w > 0);
-      }
-    }
+  if (!playing) {
+    ctx.fillStyle = "#060916cc";
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = "center";
+    ctx.fillStyle = area.ground;
+    ctx.font = "bold 38px system-ui";
+    ctx.fillText(won ? "YOU BEAT PULSE RUNNER!" : crashed ? "YOU DIED" : "PULSE RUNNER", W/2, 165);
+    ctx.fillStyle = "#fff";
+    ctx.font = "20px system-ui";
+    ctx.fillText(
+      won ? "Incredible run! Press Space to play again." :
+      crashed ? `You reached ${percent}%. Press Space to try again.` :
+      "Press Space or tap to start",
+      W/2, 210
+    );
+  } else if (levelFlash > 0) {
+    ctx.fillStyle = "#07101dcc";
+    ctx.fillRect(250, 145, 500, 80);
+    ctx.textAlign = "center";
+    ctx.fillStyle = area.ground;
+    ctx.font = "bold 30px system-ui";
+    ctx.fillText(area.name, W/2, 195);
+  }
+  ctx.textAlign = "left";
+}
 
-    function loop() {
-      update();
-      draw();
-      requestAnimationFrame(loop);
-    }
-    loop();
-  </script>
+function loop() {
+  if (playing) update();
+  draw();
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
 </body>
 </html>
