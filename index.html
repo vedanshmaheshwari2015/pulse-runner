@@ -6,417 +6,657 @@
   <title>Pulse Runner</title>
   <style>
     * { box-sizing: border-box; }
+
     body {
-      margin: 0; min-height: 100vh; display: grid; place-items: center;
-      background: #080b18; color: #f4f6ff; font: 16px system-ui, sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #080b18;
+      color: #f4f6ff;
+      font: 16px system-ui, sans-serif;
     }
+
     main { width: min(1000px, 96vw); }
     h1 { margin: 0 0 8px; letter-spacing: .12em; }
     p { color: #bac4e4; }
+
     canvas {
-      display: block; width: 100%; border: 2px solid #45527b;
-      border-radius: 12px; background: #10162b; touch-action: manipulation;
+      display: block;
+      width: 100%;
+      border: 2px solid #45527b;
+      border-radius: 12px;
+      background: #10162b;
+      touch-action: manipulation;
     }
-    .hint { font-size: 14px; }
+
+    .hint { font-size: 14px; line-height: 1.6; }
   </style>
 </head>
 <body>
 <main>
   <h1>PULSE RUNNER</h1>
-  <p>Five areas. Hidden hazards. Find your path and survive.</p>
+  <p>One long run through five different sections.</p>
   <canvas id="game" width="1000" height="420"></canvas>
-  <p class="hint">Space / ↑ / tap: jump · M: music · R: restart</p>
+  <p class="hint">
+    Space / ↑ / click / tap: jump · M: music on/off · R: restart<br>
+    The ghost shows your previous run.
+  </p>
 </main>
 
 <script>
+"use strict";
+
 const canvas = document.querySelector("#game");
 const ctx = canvas.getContext("2d");
-const W = canvas.width, H = canvas.height, groundY = 330;
-const player = { x: 145, y: groundY - 34, size: 34, vy: 0 };
-const stageLength = 2600, stages = 5, totalLength = stageLength * stages;
 
-const areas = [
-  { name: "NEON CITY", sky: "#101a35", ground: "#39e8c2", accent: "#8a7dff", root: 220 },
-  { name: "CRYSTAL CAVES", sky: "#10243a", ground: "#63d8ff", accent: "#b27dff", root: 196 },
-  { name: "EMBER RUINS", sky: "#351b28", ground: "#ff945e", accent: "#ff527a", root: 174 },
-  { name: "SKY CIRCUIT", sky: "#142a42", ground: "#f6ed78", accent: "#4cf0d5", root: 247 },
-  { name: "THE VOID", sky: "#211633", ground: "#ff64db", accent: "#72a5ff", root: 164 }
+const W = canvas.width;
+const H = canvas.height;
+const groundY = 330;
+const chunkSize = 460;
+const safeStart = 1000;
+const sectionLength = 9200;
+const sectionCount = 5;
+const totalLength = sectionLength * sectionCount;
+const fixedStep = 1 / 120;
+
+const sections = [
+  { name: "BLOCK RUN", sky: "#101a35", ground: "#39e8c2", accent: "#8a7dff", root: 220 },
+  { name: "SPIKE FIELD", sky: "#162039", ground: "#63d8ff", accent: "#ff5478", root: 196 },
+  { name: "SAW WORKS", sky: "#291b32", ground: "#ff945e", accent: "#ffd15c", root: 174 },
+  { name: "LASER GRID", sky: "#102a38", ground: "#f6ed78", accent: "#4cf0d5", root: 247 },
+  { name: "THE ABYSS", sky: "#211633", ground: "#ff64db", accent: "#72a5ff", root: 164 }
 ];
 
-let worldX = 0, objects = [], floors = [], nextChunk = 0;
-let score = 0, level = 1, speed = 9;
-let playing = false, crashed = false, won = false, levelFlash = 0;
-let audio = null, musicTimer = null, musicOn = true, beat = 0;
+const player = {
+  x: 150,
+  y: groundY - 34,
+  size: 34,
+  vy: 0,
+  rotation: 0
+};
 
-function reset() {
- worldX = 0; objects = []; floors = [{ x: 0, w: 900 }]; nextChunk = 900;
-  score = 0; level = 1; speed = 9;
-  player.y = groundY - player.size; player.vy = 0;
-  playing = true; crashed = false; won = false; levelFlash = 0;
-  ensureWorld();
-  startMusic();
+let worldX = 0;
+let objects = [];
+let floors = [{ x: 0, w: safeStart }];
+let nextChunk = safeStart;
+let sectionIndex = 0;
+let speed = 370;
+let grounded = true;
+
+let playing = false;
+let crashed = false;
+let won = false;
+let sectionFlash = 0;
+
+let ghostRun = [];
+let previousGhost = null;
+
+let audio = null;
+let musicTimer = null;
+let musicOn = true;
+let beat = 0;
+
+let lastTime = null;
+let accumulator = 0;
+
+function addBlock(x, height, width) {
+  objects.push({
+    type: "block",
+    x,
+    y: groundY - height,
+    w: width,
+    h: height
+  });
 }
 
-function addPlatform(x, y, w, h) {
-  objects.push({ type: "platform", x, y, w, h });
-}
 function addHazard(type, x, y, w, h) {
   objects.push({ type, x, y, w, h });
 }
-function addSpikeRow(x, count, gap = 34) {
+
+function addSpikeRow(x, count) {
   for (let i = 0; i < count; i++) {
-    addHazard("spike", x + i * gap, groundY - 34, 32, 34);
+    addHazard("spike", x + i * 36, groundY - 34, 32, 34);
   }
 }
 
 function makeChunk(x) {
-  const area = Math.min(stages - 1, Math.floor(x / stageLength));
-  const hasPit = area >= 1 && Math.random() < 0.12 + area * 0.04;
-  const pitStart = x + 230 + Math.random() * 50;
-  const pitEnd = pitStart + 110 + Math.random() * 45;
+  const area = Math.min(
+    sectionCount - 1,
+    Math.floor(x / sectionLength)
+  );
+  const sectionEnd = (area + 1) * sectionLength;
 
-  if (hasPit) {
+  // Keep section transitions clear and avoid patterns crossing into
+  // the next section.
+  if (x + chunkSize > sectionEnd) {
+    floors.push({ x, w: chunkSize });
+    return;
+  }
+
+  const chunkInArea = Math.floor((x - area * sectionLength) / chunkSize);
+  const pattern = chunkInArea % 3;
+
+  // Each section uses one obstacle family.
+  if (area === 4) {
+    // Section 5: gaps only.
+    if (pattern === 1) {
+      floors.push({ x, w: chunkSize });
+      return;
+    }
+
+    const pitStart = x + 190;
+    const pitWidth = 175 + pattern * 12;
+    const pitEnd = pitStart + pitWidth;
+
     floors.push({ x, w: pitStart - x });
-    floors.push({ x: pitEnd, w: x + 460 - pitEnd });
-
-    // Some pits have a raised block path across them.
-    if (Math.random() < 0.5) {
-      addPlatform(pitStart - 10, 245, pitEnd - pitStart + 20, 22);
-    }
-  } else {
-    floors.push({ x, w: 460 });
+    floors.push({ x: pitEnd, w: x + chunkSize - pitEnd });
+    return;
   }
 
-  const pattern = Math.floor(Math.random() * 4);
+  floors.push({ x, w: chunkSize });
 
-  // Area 1: learn to jump over blocks and climb onto them.
   if (area === 0) {
+    // Section 1: climbable blocks only.
     if (pattern === 0) {
-      addPlatform(x + 170, groundY - 54, 62, 54);
+      addBlock(x + 175, 54, 62);
     } else if (pattern === 1) {
-      addPlatform(x + 125, groundY - 48, 58, 48);
-      addPlatform(x + 245, groundY - 68, 72, 68);
-    } else if (pattern === 2) {
-      addPlatform(x + 115, groundY - 56, 65, 56);
-      addSpikeRow(x + 255, 2);
+      addBlock(x + 125, 48, 58);
+      addBlock(x + 275, 66, 68);
     } else {
-      addPlatform(x + 105, groundY - 45, 55, 45);
-      addPlatform(x + 205, groundY - 75, 65, 75);
-      addPlatform(x + 320, groundY - 52, 58, 52);
+      addBlock(x + 105, 44, 56);
+      addBlock(x + 215, 72, 66);
+      addBlock(x + 335, 54, 58);
     }
     return;
   }
 
-  // Area 2: longer block sequences, with pits and saws.
   if (area === 1) {
-    if (pattern === 0) {
-      addPlatform(x + 105, groundY - 58, 72, 58);
-      addPlatform(x + 220, groundY - 58, 72, 58);
-    } else if (pattern === 1) {
-      addPlatform(x + 110, groundY - 48, 58, 48);
-      addPlatform(x + 200, groundY - 78, 68, 78);
-      addPlatform(x + 300, groundY - 48, 58, 48);
-    } else if (pattern === 2) {
-      addPlatform(x + 135, groundY - 65, 80, 65);
-      addHazard("saw", x + 295, groundY - 42, 40, 40);
-    } else {
-      addPlatform(x + 100, groundY - 52, 62, 52);
-      addSpikeRow(x + 220, 3);
-    }
+    // Section 2: spikes only.
+    addSpikeRow(x + 175, pattern + 1);
     return;
   }
 
-  // Area 3: taller blocks and block-and-hazard combinations.
   if (area === 2) {
-    if (pattern === 0) {
-      addPlatform(x + 90, groundY - 65, 72, 65);
-      addPlatform(x + 200, groundY - 85, 76, 85);
-      addPlatform(x + 315, groundY - 55, 65, 55);
-    } else if (pattern === 1) {
-      addPlatform(x + 120, groundY - 75, 90, 75);
-      addHazard("orb", x + 285, 205, 34, 34);
-    } else if (pattern === 2) {
-      addPlatform(x + 100, groundY - 55, 60, 55);
-      addPlatform(x + 205, groundY - 55, 60, 55);
-      addHazard("laser", x + 330, 205, 22, 125);
-    } else {
-      addPlatform(x + 110, groundY - 85, 82, 85);
-      addSpikeRow(x + 255, 2);
+    // Section 3: saws only.
+    const count = pattern === 0 ? 1 : 2;
+    for (let i = 0; i < count; i++) {
+      addHazard("saw", x + 180 + i * 115, groundY - 44, 40, 40);
     }
     return;
   }
 
-  // Areas 4 and 5: fast block routes mixed with dangerous gaps.
-  if (pattern === 0) {
-    addPlatform(x + 90, groundY - 70, 74, 70);
-    addPlatform(x + 195, groundY - 95, 80, 95);
-    addPlatform(x + 315, groundY - 65, 68, 65);
-  } else if (pattern === 1) {
-    addPlatform(x + 105, groundY - 58, 68, 58);
-    addHazard("saw", x + 220, groundY - 43, 42, 42);
-    addPlatform(x + 310, groundY - 78, 76, 78);
-  } else if (pattern === 2) {
-    addPlatform(x + 105, groundY - 82, 90, 82);
-    addPlatform(x + 245, groundY - 60, 72, 60);
-    addHazard("orb", x + 350, 205, 34, 34);
-  } else {
-    addPlatform(x + 90, groundY - 62, 65, 62);
-    addPlatform(x + 190, groundY - 62, 65, 62);
-    addHazard("laser", x + 315, 195, 22, 135);
+  // Section 4: lasers only. Their tops are low enough to jump over.
+  const count = pattern === 2 ? 2 : 1;
+  for (let i = 0; i < count; i++) {
+    const laserHeight = 100 + pattern * 8;
+    addHazard(
+      "laser",
+      x + 205 + i * 125,
+      groundY - laserHeight,
+      22,
+      laserHeight
+    );
   }
 }
 
 function ensureWorld() {
   while (nextChunk < worldX + W + 700) {
     makeChunk(nextChunk);
-    nextChunk += 460;
+    nextChunk += chunkSize;
   }
+
   objects = objects.filter(o => o.x + o.w > worldX - 100);
   floors = floors.filter(f => f.x + f.w > worldX - 100);
 }
 
-function jump() {
-  if (!playing) {
-    reset();
-    return;
+function resetGame() {
+  if (ghostRun.length > 5) {
+    previousGhost = ghostRun.slice();
   }
-  if (player.y >= groundY - player.size - 1) player.vy = -15;
+
+  worldX = 0;
+  objects = [];
+  floors = [{ x: 0, w: safeStart }];
+  nextChunk = safeStart;
+
+  sectionIndex = 0;
+  speed = 370;
+  grounded = true;
+
+  player.y = groundY - player.size;
+  player.vy = 0;
+  player.rotation = 0;
+
+  playing = true;
+  crashed = false;
+  won = false;
+  sectionFlash = 0;
+  accumulator = 0;
+  beat = 0;
+
+  ghostRun = [{ x: 0, y: player.y }];
+
+  ensureWorld();
+  startMusic();
 }
 
-function keyHandler(e) {
-  if (["Space", "ArrowUp", "KeyW"].includes(e.code)) {
-    e.preventDefault();
-    jump();
+function jump() {
+  if (!playing) {
+    resetGame();
+    return;
   }
-  if (e.code === "KeyM") {
+
+  if (grounded) {
+    player.vy = -670;
+    grounded = false;
+  }
+}
+
+function keyHandler(event) {
+  if (["Space", "ArrowUp", "KeyW"].includes(event.code)) {
+    event.preventDefault();
+    if (!event.repeat) jump();
+  }
+
+  if (event.code === "KeyM") {
     musicOn = !musicOn;
     if (musicOn) startMusic();
     else stopMusic();
   }
-  if (e.code === "KeyR") reset();
+
+  if (event.code === "KeyR") resetGame();
 }
+
 addEventListener("keydown", keyHandler);
 canvas.addEventListener("pointerdown", jump);
 
 function startMusic() {
   if (!musicOn) return;
-  const AudioCtx = window.AudioContext || window.webkitAudioContext;
-  if (!AudioCtx) return;
-  if (!audio) audio = new AudioCtx();
+
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+
+  if (!audio) audio = new AudioContextClass();
   audio.resume();
+
   if (musicTimer) return;
 
-  beat = 0;
   musicTimer = setInterval(() => {
     if (!playing || !musicOn || !audio) return;
-    const area = areas[level - 1];
+
+    const section = sections[sectionIndex];
     const scale = [0, 3, 5, 7, 10, 12, 15, 17];
-    const note = area.root * Math.pow(2, scale[(beat * 3 + level) % scale.length] / 12);
-    tone(note, beat % 4 === 0 ? .16 : .07, beat % 4 === 0 ? "triangle" : "sine");
-    if (beat % 4 === 0) tone(area.root / 2, .12, "sawtooth");
+    const step = scale[(beat * 3 + sectionIndex) % scale.length];
+    const note = section.root * Math.pow(2, step / 12);
+
+    playTone(note, beat % 4 === 0 ? 0.15 : 0.07, "triangle");
+    if (beat % 4 === 0) {
+      playTone(section.root / 2, 0.12, "sine");
+    }
     beat++;
   }, 180);
 }
+
 function stopMusic() {
-  if (musicTimer) clearInterval(musicTimer);
-  musicTimer = null;
+  if (musicTimer) {
+    clearInterval(musicTimer);
+    musicTimer = null;
+  }
 }
-function tone(freq, duration, type) {
-  const osc = audio.createOscillator(), gain = audio.createGain();
-  osc.type = type; osc.frequency.value = freq;
-  gain.gain.setValueAtTime(.0001, audio.currentTime);
-  gain.gain.exponentialRampToValueAtTime(.055, audio.currentTime + .015);
-  gain.gain.exponentialRampToValueAtTime(.0001, audio.currentTime + duration);
-  osc.connect(gain); gain.connect(audio.destination);
-  osc.start(); osc.stop(audio.currentTime + duration + .02);
+
+function playTone(frequency, duration, wave) {
+  const oscillator = audio.createOscillator();
+  const gain = audio.createGain();
+
+  oscillator.type = wave;
+  oscillator.frequency.value = frequency;
+
+  gain.gain.setValueAtTime(0.0001, audio.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.035, audio.currentTime + 0.015);
+  gain.gain.exponentialRampToValueAtTime(
+    0.0001,
+    audio.currentTime + duration
+  );
+
+  oscillator.connect(gain);
+  gain.connect(audio.destination);
+  oscillator.start();
+  oscillator.stop(audio.currentTime + duration + 0.02);
 }
 
 function overlaps(a, b) {
-  return a.x < b.x + b.w && a.x + a.w > b.x &&
-         a.y < b.y + b.h && a.y + a.h > b.y;
+  return a.x < b.x + b.w &&
+         a.x + a.w > b.x &&
+         a.y < b.y + b.h &&
+         a.y + a.h > b.y;
 }
 
-function update() {
+function die() {
+  if (!playing) return;
+  crashed = true;
+  playing = false;
+  grounded = false;
+  previousGhost = ghostRun.slice();
+}
+
+function update(dt) {
   if (!playing) return;
 
-  const oldBottom = player.y + player.size;
   const oldWorldX = worldX;
-  const oldPlayerRight = oldWorldX + player.x + player.size;
+  const oldY = player.y;
+  const oldBottom = oldY + player.size;
 
-  score += 0.12;
-  const newLevel = Math.min(stages, Math.floor(worldX / stageLength) + 1);
-  if (newLevel !== level) {
-    level = newLevel;
-    levelFlash = 90;
+  const newSection = Math.min(
+    sectionCount - 1,
+    Math.floor(worldX / sectionLength)
+  );
+
+  if (newSection !== sectionIndex) {
+    sectionIndex = newSection;
+    sectionFlash = 1.5;
     beat = 0;
   }
 
-  speed = Math.min(17, 9 + (level - 1) * 1.6 + (worldX % stageLength) / stageLength * 1.1);
-  worldX += speed;
+  const sectionProgress = (worldX % sectionLength) / sectionLength;
+  speed = 370 + sectionIndex * 18 + sectionProgress * 18;
+
+  worldX += speed * dt;
   ensureWorld();
 
-  player.vy += .72;
-  player.y += player.vy;
-  let landed = false;
+  player.vy += 1800 * dt;
+  player.y += player.vy * dt;
+  player.rotation += speed * dt * 0.012;
 
-  const playerWorld = { x: worldX + player.x, y: player.y, w: player.size, h: player.size };
-  for (const o of objects) {
-    if (o.type !== "platform") continue;
-    const overlapsX = playerWorld.x < o.x + o.w && playerWorld.x + playerWorld.w > o.x;
-    const crossedTop = oldBottom <= o.y + 5 && player.y + player.size >= o.y;
-    if (overlapsX && crossedTop && player.vy >= 0) {
-      player.y = o.y - player.size;
+  grounded = false;
+
+  const playerWorld = {
+    x: worldX + player.x,
+    y: player.y,
+    w: player.size,
+    h: player.size
+  };
+
+  // Blocks are solid: land on top, die on a side impact.
+  for (const object of objects) {
+    if (object.type !== "block") continue;
+
+    const overlapsX =
+      playerWorld.x < object.x + object.w &&
+      playerWorld.x + playerWorld.w > object.x;
+
+    const crossedTop =
+      oldBottom <= object.y + 3 &&
+      player.y + player.size >= object.y &&
+      player.vy >= 0;
+
+    if (overlapsX && crossedTop) {
+      player.y = object.y - player.size;
       player.vy = 0;
-      landed = true;
-    } else if (overlaps(playerWorld, o)) {
-      crashed = true;
+      playerWorld.y = player.y;
+      grounded = true;
+    } else if (overlaps(playerWorld, object)) {
+      die();
+      return;
     }
   }
 
-  if (!landed) {
+  // Land only when the player is over a floor segment.
+  if (!grounded) {
     const centerX = worldX + player.x + player.size / 2;
-    const onFloor = floors.some(f => centerX >= f.x && centerX <= f.x + f.w);
-    if (onFloor && player.y + player.size >= groundY && player.vy >= 0) {
+    const hasFloor = floors.some(
+      floor => centerX >= floor.x && centerX <= floor.x + floor.w
+    );
+
+    if (
+      hasFloor &&
+      oldBottom <= groundY + 2 &&
+      player.y + player.size >= groundY &&
+      player.vy >= 0
+    ) {
       player.y = groundY - player.size;
       player.vy = 0;
-      landed = true;
+      grounded = true;
     }
   }
 
-  // Deadly spikes, saws, orbs, and laser gates.
-  for (const o of objects) {
-    if (o.type === "platform") continue;
-    const hazard = { x: o.x, y: o.y, w: o.w, h: o.h };
-    if (overlaps(playerWorld, hazard)) crashed = true;
+  playerWorld.y = player.y;
+
+  for (const object of objects) {
+    if (object.type === "block") continue;
+
+    // Slightly smaller hitbox for spikes makes their tips fairer.
+    const hitbox = object.type === "spike"
+      ? {
+          x: object.x + 5,
+          y: object.y + 8,
+          w: object.w - 10,
+          h: object.h - 8
+        }
+      : object;
+
+    if (overlaps(playerWorld, hitbox)) {
+      die();
+      return;
+    }
   }
 
-  if (player.y > H + 40) crashed = true;
-  if (crashed) playing = false;
+  if (player.y > H + 45) {
+    die();
+    return;
+  }
+
+  ghostRun.push({ x: worldX, y: player.y });
+
   if (worldX >= totalLength) {
     playing = false;
     won = true;
+    previousGhost = ghostRun.slice();
   }
-  if (levelFlash > 0) levelFlash--;
+
+  if (sectionFlash > 0) sectionFlash -= dt;
+}
+
+function ghostYAt(distance) {
+  if (!previousGhost || previousGhost.length === 0) return null;
+  if (distance < previousGhost[0].x) return previousGhost[0].y;
+  if (distance > previousGhost[previousGhost.length - 1].x) return null;
+
+  let low = 0;
+  let high = previousGhost.length - 1;
+
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if (previousGhost[mid].x < distance) low = mid + 1;
+    else high = mid;
+  }
+
+  const after = previousGhost[low];
+  const before = previousGhost[Math.max(0, low - 1)];
+  const span = after.x - before.x;
+  if (span <= 0) return after.y;
+
+  const amount = (distance - before.x) / span;
+  return before.y + (after.y - before.y) * amount;
 }
 
 function draw() {
-  const area = areas[level - 1];
-  ctx.fillStyle = area.sky;
+  const section = sections[sectionIndex];
+
+  ctx.fillStyle = section.sky;
   ctx.fillRect(0, 0, W, H);
 
-  // Distant lights and moving background lines.
-  ctx.globalAlpha = .25;
-  ctx.fillStyle = area.accent;
-  for (let i = 0; i < 16; i++) {
-    const x = ((i * 91 - worldX * .22) % (W + 80) + W + 80) % (W + 80);
-    ctx.fillRect(x, 70 + (i * 37) % 170, 3, 3);
+  // Background lights move more slowly than the level.
+  ctx.globalAlpha = 0.25;
+  ctx.fillStyle = section.accent;
+  for (let i = 0; i < 18; i++) {
+    const x = ((i * 91 - worldX * 0.2) % (W + 80) + W + 80) % (W + 80);
+    ctx.fillRect(x, 65 + (i * 37) % 190, 3, 3);
   }
   ctx.globalAlpha = 1;
 
-  for (const f of floors) {
-    const sx = f.x - worldX;
+  // Draw floor segments. Missing segments are deadly pits.
+  for (const floor of floors) {
+    const screenX = floor.x - worldX;
     ctx.fillStyle = "#263454";
-    ctx.fillRect(sx, groundY, f.w, H - groundY);
-    ctx.fillStyle = area.ground;
-    ctx.fillRect(sx, groundY, f.w, 4);
+    ctx.fillRect(screenX, groundY, floor.w, H - groundY);
+    ctx.fillStyle = section.ground;
+    ctx.fillRect(screenX, groundY, floor.w, 4);
   }
 
-  for (const o of objects) {
-    const x = o.x - worldX;
-    if (o.type === "platform") {
+  for (const object of objects) {
+    const x = object.x - worldX;
+
+    if (object.type === "block") {
       ctx.fillStyle = "#596a96";
-      ctx.fillRect(x, o.y, o.w, o.h);
-      ctx.fillStyle = area.ground;
-      ctx.fillRect(x, o.y, o.w, 5);
+      ctx.fillRect(x, object.y, object.w, object.h);
+      ctx.fillStyle = section.ground;
+      ctx.fillRect(x, object.y, object.w, 5);
       ctx.fillStyle = "#8291ba";
-      for (let bx = x + 12; bx < x + o.w; bx += 24) {
-        ctx.fillRect(bx, o.y + 12, 3, Math.max(4, o.h - 18));
+
+      for (let bx = x + 12; bx < x + object.w; bx += 24) {
+        ctx.fillRect(bx, object.y + 12, 3, Math.max(4, object.h - 18));
       }
-    } else if (o.type === "spike") {
+    } else if (object.type === "spike") {
       ctx.fillStyle = "#ff5478";
       ctx.beginPath();
-      ctx.moveTo(x, o.y + o.h);
-      ctx.lineTo(x + o.w / 2, o.y);
-      ctx.lineTo(x + o.w, o.y + o.h);
+      ctx.moveTo(x, object.y + object.h);
+      ctx.lineTo(x + object.w / 2, object.y);
+      ctx.lineTo(x + object.w, object.y + object.h);
+      ctx.closePath();
       ctx.fill();
-    } else if (o.type === "saw") {
+    } else if (object.type === "saw") {
       ctx.fillStyle = "#ffd15c";
       ctx.beginPath();
-      ctx.arc(x + o.w/2, o.y + o.h/2, o.w/2, 0, Math.PI*2);
+      ctx.arc(x + object.w / 2, object.y + object.h / 2, object.w / 2, 0, Math.PI * 2);
       ctx.fill();
+
       ctx.strokeStyle = "#713a43";
       ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.moveTo(x + 8, o.y + 8); ctx.lineTo(x + o.w - 8, o.y + o.h - 8);
-      ctx.moveTo(x + o.w - 8, o.y + 8); ctx.lineTo(x + 8, o.y + o.h - 8);
+      ctx.moveTo(x + 8, object.y + 8);
+      ctx.lineTo(x + object.w - 8, object.y + object.h - 8);
+      ctx.moveTo(x + object.w - 8, object.y + 8);
+      ctx.lineTo(x + 8, object.y + object.h - 8);
       ctx.stroke();
-    } else if (o.type === "orb") {
-      ctx.fillStyle = "#ff4fbc";
-      ctx.beginPath();
-      ctx.arc(x + o.w/2, o.y + o.h/2, o.w/2, 0, Math.PI*2);
-      ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.beginPath();
-      ctx.arc(x + o.w/2 - 4, o.y + o.h/2 - 4, 4, 0, Math.PI*2);
-      ctx.fill();
-    } else if (o.type === "laser") {
+    } else if (object.type === "laser") {
       ctx.fillStyle = "#ff365f";
-      ctx.fillRect(x, o.y, o.w, o.h);
+      ctx.fillRect(x, object.y, object.w, object.h);
       ctx.fillStyle = "#ffd4df";
-      ctx.fillRect(x + 7, o.y, 5, o.h);
+      ctx.fillRect(x + 7, object.y, 5, object.h);
     }
   }
 
+  // Replay the previous attempt as a translucent ghost.
+  const ghostY = ghostYAt(worldX);
+  if (ghostY !== null) {
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    ctx.fillStyle = "#60f4ff";
+    ctx.fillRect(player.x, ghostY, player.size, player.size);
+    ctx.restore();
+  }
+
+  // Player rotates while airborne, like a cube-style runner.
+  ctx.save();
+  ctx.translate(player.x + player.size / 2, player.y + player.size / 2);
+  if (!grounded) ctx.rotate(player.rotation);
   ctx.fillStyle = "#f8f7ff";
-  ctx.fillRect(player.x, player.y, player.size, player.size);
-  ctx.fillStyle = area.accent;
-  ctx.fillRect(player.x + 20, player.y + 8, 6, 6);
+  ctx.fillRect(-player.size / 2, -player.size / 2, player.size, player.size);
+  ctx.fillStyle = section.accent;
+  ctx.fillRect(4, -8, 6, 6);
+  ctx.restore();
 
   const percent = Math.min(100, Math.floor(worldX / totalLength * 100));
+
   ctx.fillStyle = "#fff";
   ctx.font = "bold 17px system-ui";
-  ctx.fillText(`AREA ${level} / 5  ·  ${area.name}`, 22, 30);
+  ctx.fillText(
+    `SECTION ${sectionIndex + 1} / ${sectionCount}  ·  ${section.name}`,
+    22,
+    30
+  );
   ctx.textAlign = "right";
   ctx.fillText(`${percent}%`, W - 22, 30);
   ctx.textAlign = "left";
 
   ctx.fillStyle = "#ffffff30";
   ctx.fillRect(22, 42, W - 44, 7);
-  ctx.fillStyle = area.ground;
+  ctx.fillStyle = section.ground;
   ctx.fillRect(22, 42, (W - 44) * percent / 100, 7);
+
+  if (previousGhost) {
+    ctx.fillStyle = "#60f4ff";
+    ctx.font = "bold 12px system-ui";
+    ctx.fillText("GHOST RUN", 22, 68);
+  }
 
   if (!playing) {
     ctx.fillStyle = "#060916cc";
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = "center";
-    ctx.fillStyle = area.ground;
+    ctx.fillStyle = section.ground;
     ctx.font = "bold 38px system-ui";
-    ctx.fillText(won ? "YOU BEAT PULSE RUNNER!" : crashed ? "YOU DIED" : "PULSE RUNNER", W/2, 165);
+
+    if (won) {
+      ctx.fillText("RUN COMPLETE!", W / 2, 165);
+    } else if (crashed) {
+      ctx.fillText("YOU DIED", W / 2, 165);
+    } else {
+      ctx.fillText("PULSE RUNNER", W / 2, 165);
+    }
+
     ctx.fillStyle = "#fff";
     ctx.font = "20px system-ui";
-    ctx.fillText(
-      won ? "Incredible run! Press Space to play again." :
-      crashed ? `You reached ${percent}%. Press Space to try again.` :
-      "Press Space or tap to start",
-      W/2, 210
-    );
-  } else if (levelFlash > 0) {
+
+    if (won) {
+      ctx.fillText("Press Space or tap to run again.", W / 2, 210);
+    } else if (crashed) {
+      ctx.fillText(
+        `You reached ${percent}%. Press Space or tap to retry.`,
+        W / 2,
+        210
+      );
+    } else {
+      ctx.fillText("Press Space or tap to start.", W / 2, 210);
+      ctx.font = "15px system-ui";
+      ctx.fillStyle = "#bdc9e8";
+      ctx.fillText(
+        "A clear runway comes first. Jump with Space, ↑, or a tap.",
+        W / 2,
+        244
+      );
+    }
+
+    ctx.textAlign = "left";
+  } else if (sectionFlash > 0) {
     ctx.fillStyle = "#07101dcc";
     ctx.fillRect(250, 145, 500, 80);
     ctx.textAlign = "center";
-    ctx.fillStyle = area.ground;
+    ctx.fillStyle = section.ground;
     ctx.font = "bold 30px system-ui";
-    ctx.fillText(area.name, W/2, 195);
+    ctx.fillText(section.name, W / 2, 195);
+    ctx.textAlign = "left";
   }
-  ctx.textAlign = "left";
 }
 
-function loop() {
-  if (playing) update();
+function frame(timestamp) {
+  if (lastTime === null) lastTime = timestamp;
+
+  const elapsed = Math.min((timestamp - lastTime) / 1000, 0.05);
+  lastTime = timestamp;
+  accumulator += elapsed;
+
+  while (accumulator >= fixedStep) {
+    update(fixedStep);
+    accumulator -= fixedStep;
+  }
+
   draw();
-  requestAnimationFrame(loop);
+  requestAnimationFrame(frame);
 }
-loop();
+
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>
